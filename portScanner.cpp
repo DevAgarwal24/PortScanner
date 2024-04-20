@@ -9,9 +9,49 @@
 
 #include <unistd.h>
 
+#include <thread>
+#include <vector>
+
 bool isIpAddress(const std::string& str) {
     struct sockaddr_in sa;
     return inet_pton(AF_INET, str.c_str(), &(sa.sin_addr)) != 0;
+}
+
+void connectToServer(struct sockaddr_in serverAddr, int port) {
+    int sockfd;
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        std::cerr << "Error creating socket" << std::endl;
+        return;
+    }
+
+    // Initialize server address structure
+    serverAddr.sin_port = htons(port);
+
+    // Set timeout
+    struct timeval timeout;
+    timeout.tv_sec = 0.5;
+    timeout.tv_usec = 0;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
+        std::cerr << "Sockopt error\n";
+        return;
+    }
+
+    // Connect to the server
+    if (connect(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) == 0) {
+        std::cout << "Port: " << port << " is open\n";
+    }
+
+    close(sockfd);
+}
+
+void connectToServerMultiplePorts(struct sockaddr_in serverAddr, int portStart, int portEnd) {
+    for (int port = portStart; port < portEnd; port++) {
+        // Initialize server address structure
+        serverAddr.sin_port = htons(port);
+
+        connectToServer(serverAddr, port);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -45,7 +85,6 @@ int main(int argc, char **argv) {
     // std::cout << "Hostname: " << hostname << std::endl;
     // std::cout << "Port: " << ((port == 0) ? "All Ports" : std::to_string(port)) << std::endl;
 
-    int sockfd;
     struct sockaddr_in serverAddr;
     struct hostent *server;
 
@@ -64,44 +103,18 @@ int main(int argc, char **argv) {
         bcopy((char *)server->h_addr, (char *)&serverAddr.sin_addr.s_addr, server->h_length);
     }
 
-    // Create Socket
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        std::cerr << "Error creating socket" << std::endl;
-        return 1;
-    }
-
-    if (port == 0) {
-        for (int i = 1; i < 65535; i++) {
-            // Initialize server address structure
-            serverAddr.sin_port = htons(i);
-
-            // Connect to the server
-            if (connect(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) == 0) {
-                std::cout << "Port: " << i << " is open\n";
-
-                close(sockfd);
-                sockfd = socket(AF_INET, SOCK_STREAM, 0);
-                if (sockfd < 0) {
-                    std::cerr << "Error creating socket" << std::endl;
-                    return 1;
-                }
-            }
+    if (port != 0) {
+        connectToServer(serverAddr, port);
+    } else { // Scan ports in different threads
+        std::vector<std::thread> threads;
+        for (int i = 1; i < 65535; i+=255) {
+            threads.emplace_back(std::thread(connectToServerMultiplePorts, serverAddr, i, i+255));
         }
 
-        close(sockfd);
-        return 0;
+        for (std::thread& t : threads) {
+            t.join();
+        }
     }
-
-    // Initialize server address structure
-    serverAddr.sin_port = htons(port);
-
-    // Connect to the server
-    if (connect(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) == 0) {
-        std::cout << "Port: " << port << " is open\n";
-    }
-
-    close(sockfd);
 
     return 0;
 }
