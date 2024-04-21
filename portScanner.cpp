@@ -8,13 +8,50 @@
 #include <netdb.h>
 
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <thread>
 #include <vector>
+#include <regex>
 
 bool isIpAddress(const std::string& str) {
     struct sockaddr_in sa;
     return inet_pton(AF_INET, str.c_str(), &(sa.sin_addr)) != 0;
+}
+
+std::vector<std::string> extractHostnames(const std::string &input) {
+    std::vector<std::string> hosts;
+    // std::regex pattern(R"(\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b)");
+    // std::regex pattern(R"(\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b|\blocalhost\b)");
+    std::regex pattern(R"(\b(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\b|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b|\blocalhost\b)");
+
+    std::sregex_iterator next(input.begin(), input.end(), pattern);
+    std::sregex_iterator end;
+    while (next != end) {
+        std::smatch match = *next;
+        hosts.push_back(match.str());
+        next++;
+    }
+
+    return hosts;
+}
+
+std::vector<std::string> generateIPs(const std::string& baseIP) {
+    std::vector<std::string> ips;
+
+    std::string firstPart, secondPart;
+
+    size_t pos = baseIP.find("*");
+    if (pos != std::string::npos) {
+        firstPart = baseIP.substr(0, pos);
+        secondPart = baseIP.substr(pos + 1);
+    }
+
+    for (int i = 0; i < 256; i++) {
+        ips.push_back(firstPart + std::to_string(i) + secondPart);
+    }
+
+    return ips;
 }
 
 void connectToServer(struct sockaddr_in serverAddr, int port) {
@@ -25,20 +62,44 @@ void connectToServer(struct sockaddr_in serverAddr, int port) {
         return;
     }
 
+    // Set socket to non-blocking mode
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
     // Initialize server address structure
     serverAddr.sin_port = htons(port);
 
-    // Set timeout
-    struct timeval timeout;
-    timeout.tv_sec = 0.5;
-    timeout.tv_usec = 0;
-    if (setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0) {
-        std::cerr << "Sockopt error\n";
-        return;
-    }
+    // Start connecting to the server
+    if (connect(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0) {
+        if (errno == EINPROGRESS) {
+            // Connection attempt is in progress, wait for it to complete or timeout
+            fd_set writefds;
+            FD_ZERO(&writefds);
+            FD_SET(sockfd, &writefds);
 
-    // Connect to the server
-    if (connect(sockfd, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) == 0) {
+            struct timeval timeout;
+            timeout.tv_sec = 0;
+            timeout.tv_usec = 500000; // 0.5 seconds
+
+            int result = select(sockfd + 1, NULL, &writefds, NULL, &timeout);
+            if (result > 0 && FD_ISSET(sockfd, &writefds)) {
+                // Connection successful, check for errors
+                int err;
+                socklen_t errlen = sizeof(err);
+                getsockopt(sockfd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+                if (err == 0) {
+                    std::cout << "Port: " << port << " is open\n";
+                } else {
+                    std::cerr << "Connection error: " << std::strerror(err) << std::endl;
+                }
+            } else {
+                // std::cerr << "Connection timed out\n";
+            }
+        } else {
+            // std::cerr << "Connect error: " << std::strerror(errno) << std::endl;
+        }
+    } else {
+        // Connection successful (unlikely to reach here for non-blocking connect)
         std::cout << "Port: " << port << " is open\n";
     }
 
@@ -60,19 +121,31 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    std::string hostname{};
+    std::string hostInput{};
+    bool sweep = false;
     int port{};
 
     std::string hostOpt = argv[1];
     
     if (hostOpt.find("-host=") != std::string::npos) {
-        hostname = hostOpt.substr(hostOpt.find("-host=")+6);
+        hostInput = hostOpt.substr(hostOpt.find("-host=")+6);
     } else {
         std::cerr << "Incorrect arguments. Use -h or --help for help.\n";
         return 1;
     }
 
-    if (argc == 3) {
+    std::vector<std::string> hostnames = extractHostnames(hostInput);
+    if (hostnames.size() > 1) {
+        sweep = true;
+    }
+
+    // for (const auto& hostname : hostnames) {
+    //     std::cout << hostname << std::endl;
+    // }
+
+    // If the user is trying to do port sweep, then they shouldn't provide the port number to scan for.
+    // The program will by default scan for specific ports in case of port sweep
+    if (argc == 3 && !sweep) {
         std::string portOpt = argv[2];
         if (portOpt.find("-port=") != std::string::npos) {
             port = stoi(portOpt.substr(portOpt.find("-port=")+6));
@@ -88,32 +161,58 @@ int main(int argc, char **argv) {
     struct sockaddr_in serverAddr;
     struct hostent *server;
 
-    if (isIpAddress(hostname)) {
-        // Input is an IP address
-        serverAddr.sin_family = AF_INET;
-        inet_pton(AF_INET, hostname.c_str(), &serverAddr.sin_addr);
-    } else {
-        // Input is a hostname, resolve it
-        server = gethostbyname(hostname.c_str());
-        if (server == NULL) {
-            std::cerr << "Error resolving hostname" << std::endl;
-            return 1;
+    std::vector<std::string> newHosts;
+
+    for (const auto& hostname : hostnames) {
+        // TODO: Add support for a range of ip addresses
+        if (hostname.find("*") != std::string::npos) {
+            newHosts = generateIPs(hostname);
+            continue;
         }
-        serverAddr.sin_family = AF_INET;
-        bcopy((char *)server->h_addr, (char *)&serverAddr.sin_addr.s_addr, server->h_length);
+
+        if (isIpAddress(hostname)) {
+            // Input is an IP address
+            serverAddr.sin_family = AF_INET;
+            inet_pton(AF_INET, hostname.c_str(), &serverAddr.sin_addr);
+        } else {
+            // Input is a hostname, resolve it
+            server = gethostbyname(hostname.c_str());
+            if (server == NULL) {
+                std::cerr << "Error resolving hostname" << std::endl;
+                return 1;
+            }
+            serverAddr.sin_family = AF_INET;
+            bcopy((char *)server->h_addr, (char *)&serverAddr.sin_addr.s_addr, server->h_length);
+        }
+
+        if (sweep) {
+            std::cout << hostname << ": ";
+            connectToServer(serverAddr, 443);
+        } else {
+            if (port != 0) {
+                std::cout << "Scanning port " << port << std::endl;
+                connectToServer(serverAddr, port);
+            } else { // Scan ports in different threads
+                std::cout << "Scanning all ports..." << std::endl;
+                std::vector<std::thread> threads;
+                for (int i = 1; i < 65535; i+=255) {
+                    threads.emplace_back(std::thread(connectToServerMultiplePorts, serverAddr, i, i+255));
+                }
+
+                for (std::thread& t : threads) {
+                    t.join();
+                }
+            }
+        }
     }
 
-    if (port != 0) {
-        connectToServer(serverAddr, port);
-    } else { // Scan ports in different threads
-        std::vector<std::thread> threads;
-        for (int i = 1; i < 65535; i+=255) {
-            threads.emplace_back(std::thread(connectToServerMultiplePorts, serverAddr, i, i+255));
-        }
+    for (const auto& hostname : newHosts) {
+        serverAddr.sin_family = AF_INET;
+        inet_pton(AF_INET, hostname.c_str(), &serverAddr.sin_addr);
 
-        for (std::thread& t : threads) {
-            t.join();
-        }
+        std::cout << hostname << ": " << std::flush;
+        connectToServer(serverAddr, 443);
+        std::cout << "\n";
     }
 
     return 0;
