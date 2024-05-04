@@ -91,7 +91,7 @@ void connectToServer(struct sockaddr_in serverAddr, int port) {
                 if (err == 0) {
                     std::cout << "Port: " << port << " is open\n";
                 } else {
-                    std::cerr << "Connection error: " << std::strerror(err) << std::endl;
+                    // std::cerr << "Connection error: " << std::strerror(err) << std::endl;
                 }
             } else {
                 // std::cerr << "Connection timed out\n";
@@ -116,6 +116,13 @@ void connectToServerMultiplePorts(struct sockaddr_in serverAddr, int portStart, 
     }
 }
 
+void printHelp(const std::string& programName) {
+    std::cout << "Usage: " << programName << " -host=<hostname/IP>[,<hostname/IP>,...] [-port=<port>]\n";
+    std::cout << "Options:\n";
+    std::cout << "  -host=<hostname/IP>[,<hostname/IP>,...]: Specify one or more hostnames or IP addresses to scan, separated by commas. Multiple hosts trigger a port sweep.\n";
+    std::cout << "  -port=<port>: Specify the port to scan. If not provided, all ports (1-65534) will be scanned.\n";
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         std::cerr << "Missing arguments. Use -h or --help for help.\n";
@@ -127,6 +134,11 @@ int main(int argc, char **argv) {
     int port{};
 
     std::string hostOpt = argv[1];
+
+    if (hostOpt == "--help") {
+        printHelp(argv[0]);
+        return 0;
+    }
     
     if (hostOpt.find("-host=") != std::string::npos) {
         hostInput = hostOpt.substr(hostOpt.find("-host=")+6);
