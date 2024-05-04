@@ -23,7 +23,8 @@ std::vector<std::string> extractHostnames(const std::string &input) {
     std::vector<std::string> hosts;
     // std::regex pattern(R"(\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b)");
     // std::regex pattern(R"(\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b|\blocalhost\b)");
-    std::regex pattern(R"(\b(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\b|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b|\blocalhost\b)");
+    // std::regex pattern(R"(\b(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\.(?:\d{1,3}|\*)\b|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b|\blocalhost\b)");
+	std::regex pattern(R"((?:(?:\d{1,3}|\*)\.){3}(?:\d{1,3}|\*)|\b(?:[a-zA-Z0-9\-]+\.)+[a-zA-Z]{2,}\b|\blocalhost\b)");
 
     std::sregex_iterator next(input.begin(), input.end(), pattern);
     std::sregex_iterator end;
@@ -164,9 +165,9 @@ int main(int argc, char **argv) {
     std::vector<std::string> newHosts;
 
     for (const auto& hostname : hostnames) {
-        // TODO: Add support for a range of ip addresses
         if (hostname.find("*") != std::string::npos) {
-            newHosts = generateIPs(hostname);
+            std::vector<std::string> tmpHosts = generateIPs(hostname);
+            newHosts.insert(newHosts.end(), tmpHosts.begin(), tmpHosts.end());
             continue;
         }
 
